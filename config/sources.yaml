@@ -1,0 +1,25 @@
+sources:
+  - name: adzuna
+    enabled: true
+    class: AdzunaConnector
+    base_url: "https://api.adzuna.com/v1/api/jobs"
+    auth:
+      app_id_env: ADZUNA_APP_ID
+      app_key_env: ADZUNA_APP_KEY
+    countries: ["us", "gb"]
+
+  - name: jooble
+    enabled: true
+    class: JoobleConnector
+    base_url: "https://jooble.org/api"
+    auth:
+      api_key_env: JOOBLE_API_KEY
+    countries: ["us"]
+
+  - name: usajobs
+    enabled: false               # scaffolded but off by default (Chapter 1, optional source)
+    class: UsaJobsConnector
+    base_url: "https://data.usajobs.gov/api/search"
+    auth:
+      api_key_env: USAJOBS_API_KEY
+    countries: ["us"]

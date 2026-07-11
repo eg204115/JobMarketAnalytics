@@ -1,0 +1,33 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s | %(levelname)-8s | run_id=%(run_id)s | %(name)s | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+filters:
+  run_id_filter:
+    (): utils.logger.RunIdFilter
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    filters: [run_id_filter]
+    stream: ext://sys.stdout
+
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: standard
+    filters: [run_id_filter]
+    filename: "logging/logs/pipeline.log"
+    maxBytes: 5242880   # 5 MB
+    backupCount: 5
+    encoding: utf8
+
+root:
+  level: DEBUG
+  handlers: [console, file]

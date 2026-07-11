@@ -1,0 +1,23 @@
+app:
+  name: job-market-analytics
+  environment: ${APP_ENV:local}   # default "local" if APP_ENV unset
+
+storage:
+  # Local dev writes to disk; Fabric/prod writes to OneLake/ADLS paths.
+  bronze_path: "data/bronze"
+  silver_path: "data/silver"
+  gold_path: "data/gold"
+  # Fabric equivalent (used from Chapter 3 onward):
+  # bronze_path: "Tables/bronze"
+
+ingestion:
+  default_country: "us"
+  results_per_page: 50
+  max_pages_per_run: 5          # caps API usage to respect free-tier limits
+  request_timeout_seconds: 15
+  max_retries: 3
+  retry_backoff_seconds: 2       # exponential: 2s, 4s, 8s
+
+logging:
+  config_file: "config/logging_config.yaml"
+  log_dir: "logging/logs"
