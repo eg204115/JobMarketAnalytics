@@ -10,6 +10,7 @@ PyYAML
 pyspark
 delta-spark
 pandas
+pyarrow          
 
 # Testing
 pytest
