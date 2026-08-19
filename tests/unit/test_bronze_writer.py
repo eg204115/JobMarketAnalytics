@@ -1,28 +1,15 @@
 """
-Unit tests for bronze_writer.py using a local SparkSession (no Delta write —
-tested against the DataFrame transformations only, which don't require a
-real Delta/Fabric environment to verify).
+Unit tests for bronze_writer.py. Uses the shared session-scoped `spark`
+fixture from tests/conftest.py — no Delta write here, only the DataFrame
+transformations, which need no real Delta/Fabric environment to verify.
 """
 
 import json
 from pathlib import Path
 
 import pytest
-from pyspark.sql import SparkSession
 
 from transformation.bronze_writer import add_partition_column, load_raw_json_as_dataframe
-
-
-@pytest.fixture(scope="module")
-def spark():
-    session = (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("test_bronze_writer")
-        .getOrCreate()
-    )
-    yield session
-    session.stop()
 
 
 @pytest.fixture
