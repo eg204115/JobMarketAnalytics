@@ -18,8 +18,6 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-extract_skills_udf = F.udf(extract_skills, "array<string>")
-
 
 def build_fact_and_bridge(
     spark: SparkSession,
@@ -33,6 +31,11 @@ def build_fact_and_bridge(
     dim_location = spark.read.format("delta").load(dim_location_path)
     dim_date = spark.read.format("delta").load(dim_date_path)
     dim_skill = spark.read.format("delta").load(dim_skill_path)
+
+    # Built here rather than at module scope: F.udf() needs a live
+    # SparkSession, so a module-level UDF makes importing this module
+    # impossible before the session exists (and breaks test collection).
+    extract_skills_udf = F.udf(extract_skills, "array<string>")
 
     with_skills = silver_df.withColumn("skills", extract_skills_udf(F.col("description")))
 
