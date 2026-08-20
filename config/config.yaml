@@ -7,8 +7,12 @@ storage:
   bronze_path: "data/bronze"
   silver_path: "data/silver"
   gold_path: "data/gold"
-  # Fabric equivalent (used from Chapter 3 onward):
-  # bronze_path: "Tables/bronze"
+  # Fabric equivalents. Note the two different forms for the SAME location:
+  # plain Python IO (run_ingestion's json.dump, bronze_writer's Path.glob)
+  # needs the OneLake local mount, while Spark reads/writes take the path
+  # relative to the notebook's default lakehouse.
+  #   bronze_path: "/lakehouse/default/Files/bronze"   # Python IO
+  #   bronze table: "Tables/bronze_job_postings"       # Spark write
 
 ingestion:
   default_country: "us"
