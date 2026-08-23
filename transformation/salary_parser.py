@@ -28,9 +28,13 @@ SALARY_RESULT_SCHEMA = StructType([
 
 # Matches patterns like "$90,000 - $120,000", "Rs. 250,000", "£45k - £60k"
 _CURRENCY_SYMBOLS = {"$": "USD", "£": "GBP", "€": "EUR", "Rs.": "LKR", "Rs": "LKR"}
+# Each amount must START with a digit: [\d,]+ alone also matches a bare
+# string of commas, which then becomes float("") and raises ValueError on
+# real job descriptions. The k suffixes are captured rather than discarded
+# so "45k" scales only when the k belongs to that number.
 _RANGE_PATTERN = re.compile(
-    r"(?P<symbol>\$|£|€|Rs\.?)\s?(?P<low>[\d,]+)(?:k)?"
-    r"(?:\s*-\s*(?:\$|£|€|Rs\.?)?\s?(?P<high>[\d,]+)(?:k)?)?",
+    r"(?P<symbol>\$|£|€|Rs\.?)\s?(?P<low>\d[\d,]*)(?P<low_k>k)?"
+    r"(?:\s*-\s*(?:\$|£|€|Rs\.?)?\s?(?P<high>\d[\d,]*)(?P<high_k>k)?)?",
     re.IGNORECASE,
 )
 
@@ -47,18 +51,28 @@ def _parse_single_salary_text(text: str | None) -> tuple[float | None, float | N
     symbol = match.group("symbol")
     currency = _CURRENCY_SYMBOLS.get(symbol, None)
 
-    def to_number(raw: str | None) -> float | None:
-        if raw is None:
+    def to_number(raw: str | None, is_thousands: bool) -> float | None:
+        if not raw:
             return None
-        value = float(raw.replace(",", ""))
-        # Handle "60k" style shorthand — detected via the (?:k)? group,
-        # but re-checked here since the group doesn't capture the 'k' itself.
-        if "k" in text.lower() and value < 1000:
+        digits = raw.replace(",", "")
+        if not digits.isdigit():
+            # Defensive: a malformed amount should drop that one posting's
+            # salary, not kill the whole Spark stage with a ValueError.
+            return None
+        value = float(digits)
+        # Scale only when the k directly follows THIS number. Testing
+        # `"k" in text` instead scales on any k anywhere in the description
+        # ("Bank", "Kingdom"), silently inflating hourly rates 1000x.
+        if is_thousands:
             value *= 1000
         return value
 
-    low = to_number(match.group("low"))
-    high = to_number(match.group("high")) if match.group("high") else low
+    low = to_number(match.group("low"), bool(match.group("low_k")))
+    high = (
+        to_number(match.group("high"), bool(match.group("high_k")))
+        if match.group("high")
+        else low
+    )
 
     return low, high, currency
 
