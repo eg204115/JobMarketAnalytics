@@ -54,6 +54,7 @@ def run(
     sources_path: str = "config/sources.yaml",
     logging_config_path: str = "config/logging_config.yaml",
     bronze_path: str | None = None,
+    source_name: str | None = None,
 ) -> int:
     """
     Every path is a parameter with the local default baked in, so the same
@@ -63,6 +64,11 @@ def run(
     there — that is the whole reason these are arguments rather than constants.
 
     bronze_path overrides storage.bronze_path from config when supplied.
+
+    source_name restricts the run to a single enabled source. The Fabric
+    pipeline's ForEach passes one source per iteration so that one source's
+    failure fails only its own iteration; None keeps the every-enabled-source
+    behaviour a manual or CLI run expects.
     """
     setup_logging(config_path=logging_config_path)
     logger.info("Starting ingestion run_id=%s", get_run_id())
@@ -74,6 +80,19 @@ def run(
         return 1
 
     connectors = build_enabled_connectors(app_config)
+
+    if source_name:
+        connectors = [c for c in connectors if c.source_name == source_name]
+        if not connectors:
+            # Loud rather than a silent no-op: the control table and
+            # sources.yaml are kept in sync by hand, so a name that matches
+            # nothing enabled means those two have drifted apart.
+            logger.critical(
+                "Requested source '%s' is not an enabled source in %s.",
+                source_name, sources_path,
+            )
+            return 1
+
     if not connectors:
         logger.warning("No enabled sources found in sources.yaml — nothing to do.")
         return 0

@@ -1,0 +1,259 @@
+{
+  "name": "master_pipeline_job_market_analytics",
+  "properties": {
+    "description": "Daily Bronze->Silver->Gold run. Ingestion fans out over the enabled sources in control.pipeline_sources so one source's failure cannot abort the others; Silver and Gold are shared stages gated on at least one source having succeeded. Notebook activity objectIds are workspace-specific and must be re-pointed after import.",
+    "parameters": {
+      "windowStart": {
+        "type": "string",
+        "defaultValue": "@utcnow()"
+      },
+      "windowEnd": {
+        "type": "string",
+        "defaultValue": "@utcnow()"
+      }
+    },
+    "variables": {
+      "failedSources": {
+        "type": "Array",
+        "defaultValue": []
+      }
+    },
+    "activities": [
+      {
+        "name": "LookupEnabledSources",
+        "type": "Lookup",
+        "policy": {
+          "retry": 2,
+          "retryIntervalInSeconds": 30,
+          "timeout": "0.00:05:00"
+        },
+        "typeProperties": {
+          "source": {
+            "type": "DeltaSource",
+            "query": "SELECT source_name FROM control.pipeline_sources WHERE enabled = true AND layer = 'ingestion'"
+          },
+          "firstRowOnly": false
+        }
+      },
+      {
+        "name": "ForEachSource",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "LookupEnabledSources",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('LookupEnabledSources').output.value",
+            "type": "Expression"
+          },
+          "isSequential": false,
+          "batchCount": 4
+        },
+        "activities": [
+          {
+            "name": "RunIngestionNotebook",
+            "type": "TridentNotebook",
+            "policy": {
+              "retry": 2,
+              "retryIntervalInSeconds": 30,
+              "timeout": "0.00:10:00"
+            },
+            "typeProperties": {
+              "notebookId": "<01_bronze_ingestion-notebook-guid>",
+              "workspaceId": "<workspace-guid>",
+              "parameters": {
+                "source_name": {
+                  "value": {
+                    "value": "@item().source_name",
+                    "type": "Expression"
+                  },
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "name": "OnIngestionFailure",
+            "type": "SetVariable",
+            "dependsOn": [
+              {
+                "activity": "RunIngestionNotebook",
+                "dependencyConditions": ["Failed"]
+              }
+            ],
+            "typeProperties": {
+              "variableName": "failedSources",
+              "value": {
+                "value": "@union(variables('failedSources'), array(item().source_name))",
+                "type": "Expression"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "CheckAnySourceSucceeded",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "ForEachSource",
+            "dependencyConditions": ["Completed"]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@less(length(variables('failedSources')), length(activity('LookupEnabledSources').output.value))",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "RunSilverNotebook",
+              "type": "TridentNotebook",
+              "policy": {
+                "retry": 1,
+                "retryIntervalInSeconds": 60,
+                "timeout": "0.00:20:00"
+              },
+              "typeProperties": {
+                "notebookId": "<02_silver_cleaning-notebook-guid>",
+                "workspaceId": "<workspace-guid>",
+                "parameters": {
+                  "ingestion_date": {
+                    "value": {
+                      "value": "@pipeline().parameters.windowStart",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            {
+              "name": "RunGoldNotebook",
+              "type": "TridentNotebook",
+              "dependsOn": [
+                {
+                  "activity": "RunSilverNotebook",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "policy": {
+                "retry": 1,
+                "retryIntervalInSeconds": 60,
+                "timeout": "0.00:30:00"
+              },
+              "typeProperties": {
+                "notebookId": "<03_gold_transformation-notebook-guid>",
+                "workspaceId": "<workspace-guid>",
+                "parameters": {
+                  "run_date": {
+                    "value": {
+                      "value": "@pipeline().parameters.windowStart",
+                      "type": "Expression"
+                    },
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            {
+              "name": "AlertSilverOrGoldFailed",
+              "type": "WebActivity",
+              "dependsOn": [
+                {
+                  "activity": "RunSilverNotebook",
+                  "dependencyConditions": ["Failed"]
+                },
+                {
+                  "activity": "RunGoldNotebook",
+                  "dependencyConditions": ["Failed"]
+                }
+              ],
+              "typeProperties": {
+                "url": {
+                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "type": "Expression"
+                },
+                "method": "POST",
+                "body": {
+                  "value": "@concat('Silver or Gold failed for window ', pipeline().parameters.windowStart, '. Gold was NOT refreshed — the dashboard is serving yesterday''s data.')",
+                  "type": "Expression"
+                }
+              }
+            }
+          ],
+          "ifFalseActivities": [
+            {
+              "name": "AlertAllSourcesFailed",
+              "type": "WebActivity",
+              "typeProperties": {
+                "url": {
+                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "type": "Expression"
+                },
+                "method": "POST",
+                "body": {
+                  "value": "@concat('ALL sources failed for window ', pipeline().parameters.windowStart, '. Pipeline halted before Silver/Gold.')",
+                  "type": "Expression"
+                }
+              }
+            },
+            {
+              "name": "FailPipelineAllSourcesDown",
+              "type": "Fail",
+              "dependsOn": [
+                {
+                  "activity": "AlertAllSourcesFailed",
+                  "dependencyConditions": ["Completed"]
+                }
+              ],
+              "typeProperties": {
+                "message": {
+                  "value": "@concat('Every enabled source failed for window ', pipeline().parameters.windowStart)",
+                  "type": "Expression"
+                },
+                "errorCode": "AllSourcesFailed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "AlertOnPartialFailure",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "CheckAnySourceSucceeded",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(length(variables('failedSources')), 0)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "AlertPartialFailure",
+              "type": "WebActivity",
+              "typeProperties": {
+                "url": {
+                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "type": "Expression"
+                },
+                "method": "POST",
+                "body": {
+                  "value": "@concat('Partial failure for window ', pipeline().parameters.windowStart, '. Failed sources: ', string(variables('failedSources')), '. Silver/Gold ran on the remaining data — this window''s numbers are incomplete.')",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

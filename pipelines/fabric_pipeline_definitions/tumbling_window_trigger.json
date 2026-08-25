@@ -1,0 +1,29 @@
+{
+  "name": "daily_tumbling_trigger",
+  "properties": {
+    "description": "Daily window driving master_pipeline_job_market_analytics. A tumbling window (not a plain schedule) because each run needs the window it belongs to passed in as a parameter, and because backfilling a missed day has to re-fire with that day's window rather than today's.",
+    "type": "TumblingWindowTrigger",
+    "runtimeState": "Stopped",
+    "typeProperties": {
+      "frequency": "Day",
+      "interval": 1,
+      "startTime": "2026-08-26T02:00:00Z",
+      "delay": "00:15:00",
+      "maxConcurrency": 1,
+      "retryPolicy": {
+        "count": 3,
+        "intervalInSeconds": 900
+      }
+    },
+    "pipeline": {
+      "pipelineReference": {
+        "referenceName": "master_pipeline_job_market_analytics",
+        "type": "PipelineReference"
+      },
+      "parameters": {
+        "windowStart": "@trigger().outputs.windowStartTime",
+        "windowEnd": "@trigger().outputs.windowEndTime"
+      }
+    }
+  }
+}
