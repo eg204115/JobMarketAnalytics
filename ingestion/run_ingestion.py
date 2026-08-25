@@ -14,11 +14,39 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from ingestion.base_connector import JobPosting
 from ingestion.connector_factory import build_enabled_connectors
 from utils.config_loader import ConfigError, load_config
 from utils.logger import get_logger, get_run_id, setup_logging
 
 logger = get_logger(__name__)
+
+
+def write_postings_json(
+    postings: list[JobPosting],
+    bronze_dir: str | Path,
+    source_name: str,
+    country: str,
+) -> Path | None:
+    """
+    Serializes one connector fetch into a JSON array file in the raw landing
+    directory. Extracted so pipelines/local_orchestrator.py lands files the
+    exact same way this CLI does — Bronze globs this directory by filename
+    convention, so a second implementation drifting on naming or record shape
+    would produce files Bronze silently cannot read.
+
+    Returns the path written, or None when the fetch produced nothing.
+    """
+    if not postings:
+        return None
+
+    resolved = Path(bronze_dir)
+    resolved.mkdir(parents=True, exist_ok=True)
+    out_file = resolved / f"{source_name}_{country}_{get_run_id()}.json"
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump([asdict(p) for p in postings], f, indent=2)
+    logger.info("Wrote %d records to %s", len(postings), out_file)
+    return out_file
 
 
 def run(
@@ -72,11 +100,9 @@ def run(
                 failures.append((connector.source_name, country, str(exc)))
                 continue
 
-            if postings:
-                out_file = resolved_bronze / f"{connector.source_name}_{country}_{get_run_id()}.json"
-                with open(out_file, "w", encoding="utf-8") as f:
-                    json.dump([asdict(p) for p in postings], f, indent=2)
-                logger.info("Wrote %d records to %s", len(postings), out_file)
+            if write_postings_json(
+                postings, resolved_bronze, connector.source_name, country
+            ):
                 total_records += len(postings)
 
     logger.info(

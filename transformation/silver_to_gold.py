@@ -107,3 +107,33 @@ def vacuum_fact_table(spark: SparkSession, table_path: str, retention_hours: int
     """Default retention_hours=168 (7 days) — never lowered without a specific, deliberate reason (see Theory 1.5)."""
     spark.sql(f"VACUUM delta.`{table_path}` RETAIN {retention_hours} HOURS")
     logger.info("Ran VACUUM on fact_job_postings (retention=%dh)", retention_hours)
+
+def merge_bridge_table(spark: SparkSession, bridge_df: DataFrame, table_path: str) -> None:
+    """
+    Insert-only upsert on (source_job_id, skill_key). Unlike the fact table
+    there is no non-key attribute to refresh — a skill either applies to a
+    posting or it does not — so whenMatchedUpdateAll would rewrite rows to
+    identical values. Insert-only keeps a re-run cheap and still idempotent.
+
+    Note this never *removes* a link: if a posting's description is re-parsed
+    and a skill no longer matches, the old bridge row survives. Acceptable
+    while Silver rows are append-only per posting; revisit if descriptions
+    start being updated in place.
+    """
+    if not DeltaTable.isDeltaTable(spark, table_path):
+        bridge_df.write.format("delta").save(table_path)
+        logger.info("Initialized bridge_job_skill with %d rows", bridge_df.count())
+        return
+
+    target = DeltaTable.forPath(spark, table_path)
+    (
+        target.alias("target")
+        .merge(
+            bridge_df.alias("source"),
+            "target.source_job_id = source.source_job_id "
+            "AND target.skill_key = source.skill_key",
+        )
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+    logger.info("Merged %d rows into bridge_job_skill", bridge_df.count())
