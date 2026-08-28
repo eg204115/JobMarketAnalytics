@@ -151,9 +151,20 @@ def run_silver_transformation(
     try:
         clean_df, quarantined_df = apply_dq_rules(deduped)
 
+        # replaceWhere, not append: re-running this notebook for the same
+        # ingestion_date must REPLACE that date's rows, not stack another copy
+        # on top. Append made a retried or manually re-run day silently double
+        # every posting, which then breaks the Gold MERGE with
+        # DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE and inflates
+        # every Silver-level count in the meantime.
+        #
+        # Bronze already had this property via partitionOverwriteMode=dynamic;
+        # this gives Silver the same idempotency, which the daily pipeline's
+        # retry policy depends on.
         (
             clean_df.write.format("delta")
-            .mode("append")
+            .mode("overwrite")
+            .option("replaceWhere", f"ingestion_date = '{ingestion_date}'")
             .option("mergeSchema", "true")
             .save(silver_table_path)
         )
@@ -162,7 +173,8 @@ def run_silver_transformation(
         if not quarantined_df.rdd.isEmpty():
             (
                 quarantined_df.write.format("delta")
-                .mode("append")
+                .mode("overwrite")
+                .option("replaceWhere", f"ingestion_date = '{ingestion_date}'")
                 .option("mergeSchema", "true")
                 .save(quarantine_table_path)
             )

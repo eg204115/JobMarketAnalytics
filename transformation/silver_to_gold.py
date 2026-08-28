@@ -12,6 +12,7 @@ from datetime import date
 from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 from transformation.skill_taxonomy import extract_skills
 from utils.logger import get_logger
@@ -50,6 +51,21 @@ def build_fact_and_bridge(
         )
     )
 
+    # One row per merge key before the fact is built. MERGE raises
+    # DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE if two source rows
+    # match the same target row, and Silver can legitimately hold a posting
+    # twice — a reprocessed ingestion_date, or a DQ rule change releasing a
+    # previously quarantined row. Most recent ingestion wins, so a re-scraped
+    # posting updates rather than being decided arbitrarily.
+    #
+    # This also keeps bridge_df clean, since it is derived from fact_df below.
+    latest = Window.partitionBy("source_job_id").orderBy(F.desc("ingestion_timestamp"))
+    resolved = (
+        resolved.withColumn("_row", F.row_number().over(latest))
+        .filter(F.col("_row") == 1)
+        .drop("_row")
+    )
+
     fact_df = resolved.select(
         F.col("source_job_id"),
         F.col("source").alias("source_name"),
@@ -82,11 +98,14 @@ def merge_fact_table(spark: SparkSession, fact_df: DataFrame, table_path: str) -
         return
 
     target = DeltaTable.forPath(spark, table_path)
+
+    column_map = {c: f"source.{c}" for c in fact_df.columns}
+
     (
         target.alias("target")
         .merge(fact_df.alias("source"), "target.source_job_id = source.source_job_id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
+        .whenMatchedUpdate(set=column_map)
+        .whenNotMatchedInsert(values=column_map)
         .execute()
     )
     logger.info("Merged %d rows into fact_job_postings", fact_df.count())
