@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS control.pipeline_sources (
 USING DELTA;
 
 -- Seed data mirrors config/sources.yaml. The two are kept in sync by hand for
--- this project; a larger team would generate one from the other, and
+-- this project. A larger team would generate one from the other, and
 -- run_ingestion.run() fails loudly rather than silently no-opping when a name
 -- here matches nothing enabled in sources.yaml.
 --

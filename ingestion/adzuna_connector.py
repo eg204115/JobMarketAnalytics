@@ -16,6 +16,25 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _as_float(value: Any) -> float | None:
+    """
+    Adzuna returns whole-number salaries as JSON ints ("salary_min": 0), but
+    JobPosting declares these as float and Bronze applies DoubleType, whose
+    verifier accepts float only — an int raises CANNOT_ACCEPT_OBJECT_IN_TYPE
+    and aborts the whole batch. Normalizing here keeps the dataclass's declared
+    contract honest, which is the connector's job per JobPosting's docstring.
+
+    bool is checked first because it subclasses int, so float(True) would
+    otherwise silently become 1.0.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class AdzunaConnector(BaseConnector):
 
     def _build_request(self, country: str, page: int) -> tuple[str, dict[str, Any]]:
@@ -50,8 +69,8 @@ class AdzunaConnector(BaseConnector):
                         location_raw=(item.get("location") or {}).get("display_name"),
                         country=country,
                         description=item.get("description"),
-                        salary_min=item.get("salary_min"),
-                        salary_max=item.get("salary_max"),
+                        salary_min=_as_float(item.get("salary_min")),
+                        salary_max=_as_float(item.get("salary_max")),
                         currency=item.get("salary_currency") or None,
                         remote=None,  # Adzuna doesn't expose this directly; derived in Silver
                         posted_date=item.get("created"),

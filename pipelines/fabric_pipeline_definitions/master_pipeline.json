@@ -5,11 +5,15 @@
     "parameters": {
       "windowStart": {
         "type": "string",
-        "defaultValue": "@utcnow()"
+        "defaultValue": ""
       },
       "windowEnd": {
         "type": "string",
-        "defaultValue": "@utcnow()"
+        "defaultValue": ""
+      },
+      "teamsWebhookUrl": {
+        "type": "string",
+        "defaultValue": ""
       }
     },
     "variables": {
@@ -123,7 +127,7 @@
                 "parameters": {
                   "ingestion_date": {
                     "value": {
-                      "value": "@pipeline().parameters.windowStart",
+                      "value": "@formatDateTime(if(empty(pipeline().parameters.windowStart), utcnow(), pipeline().parameters.windowStart), 'yyyy-MM-dd')",
                       "type": "Expression"
                     },
                     "type": "string"
@@ -151,7 +155,7 @@
                 "parameters": {
                   "run_date": {
                     "value": {
-                      "value": "@pipeline().parameters.windowStart",
+                      "value": "@formatDateTime(if(empty(pipeline().parameters.windowStart), utcnow(), pipeline().parameters.windowStart), 'yyyy-MM-dd')",
                       "type": "Expression"
                     },
                     "type": "string"
@@ -174,7 +178,7 @@
               ],
               "typeProperties": {
                 "url": {
-                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "value": "@pipeline().parameters.teamsWebhookUrl",
                   "type": "Expression"
                 },
                 "method": "POST",
@@ -191,7 +195,7 @@
               "type": "WebActivity",
               "typeProperties": {
                 "url": {
-                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "value": "@pipeline().parameters.teamsWebhookUrl",
                   "type": "Expression"
                 },
                 "method": "POST",
@@ -241,7 +245,7 @@
               "type": "WebActivity",
               "typeProperties": {
                 "url": {
-                  "value": "@pipeline().globalParameters.teamsWebhookUrl",
+                  "value": "@pipeline().parameters.teamsWebhookUrl",
                   "type": "Expression"
                 },
                 "method": "POST",

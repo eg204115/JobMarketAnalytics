@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.types import DoubleType
 
 from transformation.schemas import JOB_POSTING_SCHEMA
 from utils.logger import get_logger
@@ -21,6 +22,26 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 BRONZE_TABLE_NAME = "bronze_job_postings"
+
+# Fields the schema declares as DoubleType. createDataFrame's verifier accepts
+# float ONLY — a JSON int like 0 raises CANNOT_ACCEPT_OBJECT_IN_TYPE and takes
+# down the entire batch, every source included. Derived from the schema rather
+# than hardcoded so adding a numeric field doesn't reintroduce the bug.
+_DOUBLE_FIELDS = [
+    f.name for f in JOB_POSTING_SCHEMA.fields if isinstance(f.dataType, DoubleType)
+]
+
+
+def _coerce_double(value: object) -> float | None:
+    """bool first: it subclasses int, so float(True) would become 1.0."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def load_raw_json_as_dataframe(spark: SparkSession, json_dir: str) -> DataFrame:
@@ -45,6 +66,12 @@ def load_raw_json_as_dataframe(spark: SparkSession, json_dir: str) -> DataFrame:
                 # rather than relying on Spark to infer a consistent nested
                 # schema across two structurally different source APIs.
                 r["raw_payload"] = json.dumps(r.get("raw_payload", {}))
+                # Defence in depth against the connectors' declared types.
+                # A stray int in one record must not abort every other row,
+                # and JSON files already on disk from an earlier run cannot be
+                # fixed by patching a connector.
+                for name in _DOUBLE_FIELDS:
+                    r[name] = _coerce_double(r.get(name))
             records.extend(file_records)
 
     logger.info("Loaded %d raw records from %d files in %s", len(records), len(files), json_dir)
