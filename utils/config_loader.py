@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)(?::([^}]*))?\}")
 
@@ -78,7 +82,7 @@ def load_config(
     Raises ConfigError if a required file is missing or an env var
     referenced without a default is unset.
     """
-    if Path(env_file).exists():
+    if load_dotenv is not None and Path(env_file).exists():
         load_dotenv(env_file)
 
     merged: dict = {}
