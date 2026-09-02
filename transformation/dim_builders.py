@@ -193,3 +193,36 @@ def upsert_dim_company_scd2(
         "dim_company SCD2: closed %d rows, inserted %d new/changed rows",
         len(keys_to_close), new_rows.count(),
     )
+
+def write_dim_company_current(
+    spark: SparkSession,
+    dim_company_path: str,
+    out_path: str,
+) -> DataFrame:
+    """
+    Materializes the current-only slice of the SCD2 company dimension as its
+    own Delta table, for the Power BI semantic model (Chapter 7).
+
+    Why a table and not a SQL view: DirectLake reads Delta files from OneLake
+    directly, so it can only bind to PHYSICAL tables. A SQL analytics endpoint
+    view is queryable, but a semantic model table sourced from one silently
+    falls back to DirectQuery — losing the exact mode Chapter 7 chose. So the
+    "is_current = true happens once, not in every measure" argument is kept,
+    while staying DirectLake-eligible.
+
+    The SCD2 history stays in dim_company for point-in-time analysis; this is a
+    derived serving view of it, rebuilt in full each run because it is small and
+    always fully determined by its source.
+    """
+    current = (
+        spark.read.format("delta").load(dim_company_path)
+        .filter(F.col("is_current"))
+        .select("company_key", "company_natural_key", "company_name", "size_bucket")
+    )
+
+    current.write.format("delta").mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).save(out_path)
+
+    logger.info("Wrote %d current companies to %s", current.count(), out_path)
+    return current
