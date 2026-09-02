@@ -1,16 +1,17 @@
 CREATE TABLE IF NOT EXISTS gold.fact_job_postings (
-    posting_key       BIGINT GENERATED ALWAYS AS IDENTITY,
-    source_job_id     STRING NOT NULL,     -- natural key, used for MERGE matching
+    source_job_id     STRING NOT NULL,    
     source_name       STRING,
     company_key       BIGINT,
     location_key      BIGINT,
-    date_key          INT,
+    date_key          BIGINT,              
     salary_min        DOUBLE,
     salary_max        DOUBLE,
     currency          STRING,
     is_remote         BOOLEAN,
     skill_count       INT,
-    loaded_at         TIMESTAMP
+    loaded_at         TIMESTAMP,
+    contract_type     STRING              
 )
 USING DELTA
 PARTITIONED BY (date_key);
+

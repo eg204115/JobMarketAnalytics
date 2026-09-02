@@ -1,7 +1,7 @@
 {
   "name": "master_pipeline_job_market_analytics",
   "properties": {
-    "description": "Daily Bronze->Silver->Gold run. Ingestion fans out over the enabled sources in control.pipeline_sources so one source's failure cannot abort the others; Silver and Gold are shared stages gated on at least one source having succeeded. Notebook activity objectIds are workspace-specific and must be re-pointed after import.",
+    "description": "Daily Bronze->Silver->Gold run, as actually deployed to Fabric. Ingestion fans out over the enabled sources in control.pipeline_sources so one source's failure cannot abort the others; Silver and Gold are shared stages gated on at least one source having succeeded. NOT directly importable: notebook activity objectIds and the Lookup's connection binding are workspace-specific and must be re-pointed. Fabric deviations from the textbook ADF shape are documented per-activity below.",
     "parameters": {
       "windowStart": {
         "type": "string",
@@ -26,6 +26,7 @@
       {
         "name": "LookupEnabledSources",
         "type": "Lookup",
+        "description": "Reads the control table through the Lakehouse connector rather than the SQL analytics endpoint. The endpoint mirrors Delta asynchronously, so a table Spark just wrote can be invisible to it for a minute or more - unacceptable for the first activity of every scheduled run. Reading Delta directly also removes the Spark-SQL / T-SQL dialect split (enabled = true vs enabled = 1). Cost: no WHERE clause, so every row comes back and FilterEnabledSources narrows them.",
         "policy": {
           "retry": 2,
           "retryIntervalInSeconds": 30,
@@ -33,15 +34,25 @@
         },
         "typeProperties": {
           "source": {
-            "type": "DeltaSource",
-            "query": "SELECT source_name FROM control.pipeline_sources WHERE enabled = true AND layer = 'ingestion'"
+            "type": "LakehouseTableSource"
+          },
+          "datasetSettings": {
+            "type": "LakehouseTable",
+            "linkedService": "<lakehouse-connection-id>",
+            "typeProperties": {
+              "workspaceId": "<workspace-guid>",
+              "artifactId": "<lakehouse-guid>",
+              "rootFolder": "Tables",
+              "table": "control.pipeline_sources"
+            }
           },
           "firstRowOnly": false
         }
       },
       {
-        "name": "ForEachSource",
-        "type": "ForEach",
+        "name": "FilterEnabledSources",
+        "type": "Filter",
+        "description": "Exists because Fabric rejects @item() inside a ForEach's own Items property - 'item() syntax can only be used in the filter activity or child activities of a foreach activity'. The WHERE clause that used to live in the Lookup's SQL therefore cannot collapse into the ForEach either; it needs its own activity. Side benefit: FilteredItemsCount is inspectable after a run, whereas a filter buried in an expression would only surface as the wrong number of iterations.",
         "dependsOn": [
           {
             "activity": "LookupEnabledSources",
@@ -53,8 +64,27 @@
             "value": "@activity('LookupEnabledSources').output.value",
             "type": "Expression"
           },
-          "isSequential": false,
-          "batchCount": 4
+          "condition": {
+            "value": "@and(equals(item().enabled, true), equals(item().layer, 'ingestion'))",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "ForEachSource",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "FilterEnabledSources",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('FilterEnabledSources').output.Value",
+            "type": "Expression"
+          },
+          "isSequential": true
         },
         "activities": [
           {
@@ -81,7 +111,8 @@
           },
           {
             "name": "OnIngestionFailure",
-            "type": "SetVariable",
+            "type": "AppendVariable",
+            "description": "AppendVariable, not SetVariable with @union(variables('failedSources'), ...). That form reads a variable while assigning to it, which ADF/Fabric handles unpredictably. AppendVariable is purpose-built for arrays and has no self-reference. Paired with isSequential above: pipeline variables are pipeline-scoped and not thread-safe, so parallel iterations would lose each other's writes and corrupt the gate below.",
             "dependsOn": [
               {
                 "activity": "RunIngestionNotebook",
@@ -91,7 +122,7 @@
             "typeProperties": {
               "variableName": "failedSources",
               "value": {
-                "value": "@union(variables('failedSources'), array(item().source_name))",
+                "value": "@item().source_name",
                 "type": "Expression"
               }
             }
@@ -101,6 +132,7 @@
       {
         "name": "CheckAnySourceSucceeded",
         "type": "IfCondition",
+        "description": "Depends on Completed, not Succeeded - the gate must still be evaluated when a source failed, because partial data beats no data. Compares against FilterEnabledSources, not the Lookup: the Lookup returns every row in the control table including disabled ones, so comparing against its count would make the gate wrong by exactly the number of disabled sources.",
         "dependsOn": [
           {
             "activity": "ForEachSource",
@@ -109,13 +141,14 @@
         ],
         "typeProperties": {
           "expression": {
-            "value": "@less(length(variables('failedSources')), length(activity('LookupEnabledSources').output.value))",
+            "value": "@less(length(variables('failedSources')), length(activity('FilterEnabledSources').output.Value))",
             "type": "Expression"
           },
           "ifTrueActivities": [
             {
               "name": "RunSilverNotebook",
               "type": "TridentNotebook",
+              "description": "Must live INSIDE this branch. Left on the main canvas it becomes a root activity and Fabric starts it in the same second as the Lookup - reading the previous run's Bronze, before this run has ingested anything, with the gate bypassed entirely. The pipeline still reports Succeeded, which is precisely the failure mode this gate exists to prevent.",
               "policy": {
                 "retry": 1,
                 "retryIntervalInSeconds": 60,
@@ -162,97 +195,19 @@
                   }
                 }
               }
-            },
-            {
-              "name": "AlertSilverOrGoldFailed",
-              "type": "WebActivity",
-              "dependsOn": [
-                {
-                  "activity": "RunSilverNotebook",
-                  "dependencyConditions": ["Failed"]
-                },
-                {
-                  "activity": "RunGoldNotebook",
-                  "dependencyConditions": ["Failed"]
-                }
-              ],
-              "typeProperties": {
-                "url": {
-                  "value": "@pipeline().parameters.teamsWebhookUrl",
-                  "type": "Expression"
-                },
-                "method": "POST",
-                "body": {
-                  "value": "@concat('Silver or Gold failed for window ', pipeline().parameters.windowStart, '. Gold was NOT refreshed — the dashboard is serving yesterday''s data.')",
-                  "type": "Expression"
-                }
-              }
             }
           ],
           "ifFalseActivities": [
             {
-              "name": "AlertAllSourcesFailed",
-              "type": "WebActivity",
-              "typeProperties": {
-                "url": {
-                  "value": "@pipeline().parameters.teamsWebhookUrl",
-                  "type": "Expression"
-                },
-                "method": "POST",
-                "body": {
-                  "value": "@concat('ALL sources failed for window ', pipeline().parameters.windowStart, '. Pipeline halted before Silver/Gold.')",
-                  "type": "Expression"
-                }
-              }
-            },
-            {
               "name": "FailPipelineAllSourcesDown",
               "type": "Fail",
-              "dependsOn": [
-                {
-                  "activity": "AlertAllSourcesFailed",
-                  "dependencyConditions": ["Completed"]
-                }
-              ],
+              "description": "Without this the false branch runs nothing and exits clean, so 'every source down' produces a pipeline that reports Succeeded - no data and no signal. This activity is what turns that into a visible failure the Monitor hub and any failure alert can act on.",
               "typeProperties": {
                 "message": {
-                  "value": "@concat('Every enabled source failed for window ', pipeline().parameters.windowStart)",
+                  "value": "@concat('Every enabled source failed for ', formatDateTime(if(empty(pipeline().parameters.windowStart), utcnow(), pipeline().parameters.windowStart), 'yyyy-MM-dd'))",
                   "type": "Expression"
                 },
                 "errorCode": "AllSourcesFailed"
-              }
-            }
-          ]
-        }
-      },
-      {
-        "name": "AlertOnPartialFailure",
-        "type": "IfCondition",
-        "dependsOn": [
-          {
-            "activity": "CheckAnySourceSucceeded",
-            "dependencyConditions": ["Succeeded"]
-          }
-        ],
-        "typeProperties": {
-          "expression": {
-            "value": "@greater(length(variables('failedSources')), 0)",
-            "type": "Expression"
-          },
-          "ifTrueActivities": [
-            {
-              "name": "AlertPartialFailure",
-              "type": "WebActivity",
-              "typeProperties": {
-                "url": {
-                  "value": "@pipeline().parameters.teamsWebhookUrl",
-                  "type": "Expression"
-                },
-                "method": "POST",
-                "body": {
-                  "value": "@concat('Partial failure for window ', pipeline().parameters.windowStart, '. Failed sources: ', string(variables('failedSources')), '. Silver/Gold ran on the remaining data — this window''s numbers are incomplete.')",
-                  "type": "Expression"
-                }
               }
             }
           ]
