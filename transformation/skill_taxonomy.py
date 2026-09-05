@@ -8,6 +8,8 @@ sufficient to answer "which skills are most in demand."
 
 from __future__ import annotations
 
+import re
+
 SKILL_TAXONOMY: dict[str, str] = {
     # skill_name: skill_category
     "python": "Programming Language",
@@ -33,9 +35,17 @@ SKILL_TAXONOMY: dict[str, str] = {
 }
 
 
+_SKILL_PATTERNS = {
+    skill: re.compile(rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])")
+    for skill in SKILL_TAXONOMY
+}
+
+
 def extract_skills(text: str | None) -> list[str]:
     """Pure-Python skill extraction, unit-testable without Spark."""
     if not text:
         return []
     lowered = text.lower()
-    return sorted({skill for skill in SKILL_TAXONOMY if skill in lowered})
+    return sorted(
+        {skill for skill, pattern in _SKILL_PATTERNS.items() if pattern.search(lowered)}
+    )
