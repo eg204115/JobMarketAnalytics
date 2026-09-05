@@ -52,6 +52,13 @@ class AdzunaConnector(BaseConnector):
             ),
             "content-type": "application/json",
         }
+
+        # Adzuna returns every job category when `what` is omitted. Sent only
+        # when configured so a source with no query keeps the old behaviour.
+        query = self.source_config.get("query")
+        if query:
+            params["what"] = query
+
         return url, params
 
     def _parse_response(self, response_json: dict, country: str) -> list[JobPosting]:

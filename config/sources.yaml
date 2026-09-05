@@ -7,6 +7,7 @@ sources:
       app_id_env: ADZUNA_APP_ID
       app_key_env: ADZUNA_APP_KEY
     countries: ["us", "gb"]
+    query: "data engineer"
 
   - name: jooble
     enabled: true
@@ -15,6 +16,7 @@ sources:
     auth:
       api_key_env: JOOBLE_API_KEY
     countries: ["us"]
+    query: "data engineer"
 
   - name: usajobs
     enabled: false               # scaffolded but off by default (Chapter 1, optional source)
@@ -23,3 +25,4 @@ sources:
     auth:
       api_key_env: USAJOBS_API_KEY
     countries: ["us"]
+    query: "data engineer"

@@ -35,7 +35,9 @@ class JoobleConnector(BaseConnector):
         base_url = self.source_config["base_url"]
         url = f"{base_url}/{api_key}"
         body = {
-            "keywords": "",       # empty = all job categories
+            # Empty means every job category, which is what made the skills
+            # bridge nearly empty. Falls back to "" when unconfigured.
+            "keywords": self.source_config.get("query", ""),
             "location": country,
             "page": str(page),
         }
