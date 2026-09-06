@@ -31,8 +31,8 @@ def standardize_location(
     """
     Two-stage lookup, most specific first:
 
-      1. substring match of location_raw against country_codes.csv
-         ("london" -> United Kingdom)
+      1. whole-token match of location_raw against country_codes.csv
+         ("london, uk" -> United Kingdom; "londonderry" does NOT match)
       2. exact match of the source's country code against country_iso.csv
          ("gb" -> United Kingdom)
 
@@ -42,15 +42,29 @@ def standardize_location(
     every geography visual in Power BI down the middle.
 
     The two stages need different join semantics and therefore separate
-    files. country_codes.csv is matched with `contains`, which is right for
-    free-text locations but catastrophic for two-letter codes: a row for
-    "us" would match Houston, Austin and Industry.
+    files. country_codes.csv is matched on whole tokens inside free text;
+    country_iso.csv is matched exactly against a two-letter code. Neither
+    can be a plain substring test: that mapped Indianapolis to India, and
+    a substring row for "us" would match Houston, Austin and Industry.
 
     F.broadcast() is explicit rather than relying on Spark's auto-broadcast
     threshold — both tables are tiny and always want broadcast behaviour,
     regardless of later cluster config changes.
     """
-    reference_df = spark.read.option("header", True).csv(reference_path)
+    # Whole-token match, not `contains`. A plain substring test mapped
+    # "indianapolis" and "indiana" to India, and "londonderry" to London —
+    # so US postings surfaced in Power BI as the highest-paid country in the
+    # dataset. The lookarounds reject a match glued to another alphanumeric
+    # character, while still allowing multi-word terms ("new york") and
+    # punctuation boundaries ("london, uk").
+    reference_df = spark.read.option("header", True).csv(reference_path).withColumn(
+        "match_pattern",
+        F.concat(
+            F.lit("(?<![a-z0-9])"),
+            F.col("raw_location_contains"),
+            F.lit("(?![a-z0-9])"),
+        ),
+    )
     iso_df = (
         spark.read.option("header", True).csv(iso_reference_path)
         .select(
@@ -66,7 +80,7 @@ def standardize_location(
 
     joined = df_lower_location.join(
         F.broadcast(reference_df),
-        df_lower_location["location_lower"].contains(reference_df["raw_location_contains"]),
+        F.expr("location_lower RLIKE match_pattern"),
         how="left",
     ).join(
         F.broadcast(iso_df),
