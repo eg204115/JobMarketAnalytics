@@ -22,30 +22,64 @@ logger = get_logger(__name__)
 SOURCE_PRIORITY = {"adzuna": 2, "jooble": 1}
 
 
-def standardize_location(df: DataFrame, spark: SparkSession, reference_path: str) -> DataFrame:
+def standardize_location(
+    df: DataFrame,
+    spark: SparkSession,
+    reference_path: str,
+    iso_reference_path: str,
+) -> DataFrame:
     """
-    Broadcast join against the small country reference table. F.broadcast()
-    is explicit here rather than relying on Spark's auto-broadcast threshold,
-    because this join happens on every Silver run against a table small
-    enough (~250 rows) to always want broadcast behavior, regardless of
-    cluster config changes over time.
+    Two-stage lookup, most specific first:
+
+      1. substring match of location_raw against country_codes.csv
+         ("london" -> United Kingdom)
+      2. exact match of the source's country code against country_iso.csv
+         ("gb" -> United Kingdom)
+
+    Stage 2 replaces what used to be a bare coalesce onto df["country"].
+    That fallback emitted the raw API code, so canonical_country ended up
+    holding BOTH "gb" and "United Kingdom" for the same country — splitting
+    every geography visual in Power BI down the middle.
+
+    The two stages need different join semantics and therefore separate
+    files. country_codes.csv is matched with `contains`, which is right for
+    free-text locations but catastrophic for two-letter codes: a row for
+    "us" would match Houston, Austin and Industry.
+
+    F.broadcast() is explicit rather than relying on Spark's auto-broadcast
+    threshold — both tables are tiny and always want broadcast behaviour,
+    regardless of later cluster config changes.
     """
-    reference_df = (
-        spark.read.option("header", True).csv(reference_path)
+    reference_df = spark.read.option("header", True).csv(reference_path)
+    iso_df = (
+        spark.read.option("header", True).csv(iso_reference_path)
+        .select(
+            F.lower(F.trim(F.col("iso_code"))).alias("iso_code"),
+            F.col("canonical_country").alias("iso_country"),
+            F.col("region").alias("iso_region"),
+        )
     )
 
-    df_lower_location = df.withColumn("location_lower", F.lower(F.trim(F.col("location_raw"))))
+    df_lower_location = df.withColumn(
+        "location_lower", F.lower(F.trim(F.col("location_raw")))
+    )
 
     joined = df_lower_location.join(
         F.broadcast(reference_df),
         df_lower_location["location_lower"].contains(reference_df["raw_location_contains"]),
         how="left",
+    ).join(
+        F.broadcast(iso_df),
+        F.lower(F.trim(df_lower_location["country"])) == iso_df["iso_code"],
+        how="left",
     )
 
     return joined.select(
         df["*"],
-        F.coalesce(joined["canonical_country"], df["country"]).alias("canonical_country"),
-        joined["region"],
+        F.coalesce(
+            joined["canonical_country"], joined["iso_country"]
+        ).alias("canonical_country"),
+        F.coalesce(joined["region"], joined["iso_region"]).alias("region"),
     )
 
 
@@ -129,6 +163,7 @@ def run_silver_transformation(
     silver_table_path: str,
     quarantine_table_path: str,
     ingestion_date: str,
+    iso_reference_path: str,
 ) -> None:
     bronze_df = (
         spark.read.format("delta").load(bronze_table_path)
@@ -139,7 +174,9 @@ def run_silver_transformation(
         logger.warning("No Bronze rows found for ingestion_date=%s — skipping Silver run.", ingestion_date)
         return
 
-    standardized = standardize_location(bronze_df, spark, reference_path)
+    standardized = standardize_location(
+        bronze_df, spark, reference_path, iso_reference_path
+    )
     salaried = parse_salaries(standardized)
     deduped = deduplicate_postings(salaried)
 

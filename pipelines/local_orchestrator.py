@@ -249,6 +249,7 @@ def run_pipeline(
         "storage", "bronze_path", default="data/bronze"
     )
     reference_path = f"{config_dir}/reference/country_codes.csv"
+    iso_reference_path = f"{config_dir}/reference/country_iso.csv"
 
     connectors = build_enabled_connectors(app_config)
     if not connectors:
@@ -297,6 +298,7 @@ def run_pipeline(
             silver_table_path=paths.silver,
             quarantine_table_path=paths.quarantine,
             ingestion_date=str(window_date),
+            iso_reference_path=iso_reference_path,
         )
         result.silver_ran = True
     except Exception as exc:
