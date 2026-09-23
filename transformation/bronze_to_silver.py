@@ -71,6 +71,7 @@ def standardize_location(
             F.lower(F.trim(F.col("iso_code"))).alias("iso_code"),
             F.col("canonical_country").alias("iso_country"),
             F.col("region").alias("iso_region"),
+            F.col("currency").alias("iso_currency"),
         )
     )
 
@@ -94,6 +95,7 @@ def standardize_location(
             joined["canonical_country"], joined["iso_country"]
         ).alias("canonical_country"),
         F.coalesce(joined["region"], joined["iso_region"]).alias("region"),
+        joined["iso_currency"],
     )
 
 
@@ -124,10 +126,22 @@ def parse_salaries(df: DataFrame) -> DataFrame:
             F.coalesce(F.col("adzuna_salary_max"), F.col("jooble_parsed.parsed_salary_max")),
         )
         .withColumn(
+            # Third fallback: the posting's country. Adzuna's GB endpoint does
+            # not return salary_currency, so UK salaries arrived NULL — they
+            # were GBP figures sitting in a column that said nothing, next to
+            # USD figures that said USD. In Power BI that reads as one
+            # currency with some gaps, not two currencies, and the reader
+            # compares the bars anyway.
             "final_currency",
-            F.coalesce(F.col("currency"), F.col("jooble_parsed.parsed_currency")),
+            F.coalesce(
+                F.col("currency"),
+                F.col("jooble_parsed.parsed_currency"),
+                F.col("iso_currency"),
+            ),
         )
-        .drop("jooble_parsed", "adzuna_salary_min", "adzuna_salary_max")
+        .drop(
+            "jooble_parsed", "adzuna_salary_min", "adzuna_salary_max", "iso_currency"
+        )
     )
 
 

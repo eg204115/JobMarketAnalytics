@@ -1,11 +1,11 @@
-iso_code,canonical_country,region
-us,United States,North America
-gb,United Kingdom,Europe
-in,India,South Asia
-lk,Sri Lanka,South Asia
-ca,Canada,North America
-au,Australia,Oceania
-de,Germany,Europe
-fr,France,Europe
-nl,Netherlands,Europe
-sg,Singapore,Southeast Asia
+iso_code,canonical_country,region,currency
+us,United States,North America,USD
+gb,United Kingdom,Europe,GBP
+in,India,South Asia,INR
+lk,Sri Lanka,South Asia,LKR
+ca,Canada,North America,CAD
+au,Australia,Oceania,AUD
+de,Germany,Europe,EUR
+fr,France,Europe,EUR
+nl,Netherlands,Europe,EUR
+sg,Singapore,Southeast Asia,SGD
